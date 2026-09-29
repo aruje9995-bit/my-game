@@ -1,0 +1,295 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>휴가 당첨 사다리</title>
+<style>
+  :root{
+    --bg:#f6efe6; --panel:#fffaf3; --ink:#2b1d14; --muted:#7a6656;
+    --line:#2b1d14; --accent:#b5541c; --win:#d4252c; --card:#5b3a26;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);
+    font-family:"Pretendard","Apple SD Gothic Neo","Malgun Gothic",sans-serif;}
+  .wrap{max-width:900px;margin:0 auto;padding:20px 16px 40px}
+  h1{margin:0 0 4px;font-size:clamp(22px,4vw,32px);text-align:center}
+  .sub{margin:0 0 16px;text-align:center;color:var(--muted);font-size:14px}
+  .controls{display:flex;gap:10px;justify-content:center;margin-bottom:14px;flex-wrap:wrap}
+  button.main{border:0;border-radius:999px;padding:12px 26px;font-size:17px;font-weight:700;
+    cursor:pointer;background:var(--accent);color:#fff;box-shadow:0 3px 0 #7d3510}
+  button.main:active{transform:translateY(2px);box-shadow:0 1px 0 #7d3510}
+  button.main.ghost{background:#fff;color:var(--accent);box-shadow:0 3px 0 #d9c3ae;border:2px solid var(--accent)}
+  button.main:disabled{opacity:.4;cursor:default}
+  .board{background:var(--panel);border-radius:18px;padding:14px 8px 16px;
+    box-shadow:0 6px 24px rgba(60,30,10,.12)}
+  .row{display:grid;grid-template-columns:repeat(8,1fr);gap:0}
+  .name{margin:0 3px;padding:10px 0;border-radius:12px;border:3px solid var(--c);
+    background:#fff;color:var(--ink);font-weight:800;font-size:clamp(13px,2.6vw,18px);cursor:pointer;
+    transition:transform .15s, background .2s}
+  .name:hover:not(:disabled){transform:translateY(-3px)}
+  .name:disabled{cursor:default;opacity:.45}
+  .name.done{background:var(--c);color:#fff;opacity:1}
+  svg{display:block;width:100%;height:auto}
+  .prize{margin:0 3px;min-height:78px;border-radius:12px;perspective:600px}
+  .prize .in{position:relative;width:100%;height:100%;min-height:78px;transition:transform .7s;transform-style:preserve-3d}
+  .prize.open .in{transform:rotateY(180deg)}
+  .face{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;
+    border-radius:12px;backface-visibility:hidden;text-align:center;padding:4px 2px;
+    font-weight:800;font-size:clamp(10px,1.9vw,14px);line-height:1.25;word-break:keep-all}
+  .front{background:var(--card);color:#f3d9b1;font-size:clamp(20px,4vw,30px)}
+  .back{transform:rotateY(180deg);background:#efe4d6;color:var(--ink);border:3px solid #cbb49c}
+  .back.win{background:var(--win);color:#fff;border-color:#8f1116;animation:glow 1s ease-in-out infinite alternate}
+  .back small{display:block;margin-top:4px;font-size:clamp(10px,1.8vw,13px);font-weight:700;opacity:.85}
+  @keyframes glow{from{box-shadow:0 0 0 rgba(212,37,44,.0)}to{box-shadow:0 0 18px rgba(212,37,44,.8)}}
+  .msg{min-height:34px;margin-top:14px;text-align:center;font-size:clamp(16px,3vw,22px);font-weight:800}
+  .msg .w{color:var(--win)}
+  .rung{stroke-dasharray:var(--len);stroke-dashoffset:var(--len);transition:stroke-dashoffset .35s ease-out}
+  .rung.show{stroke-dashoffset:0}
+  .confetti{position:fixed;top:-20px;width:10px;height:16px;z-index:10;pointer-events:none;
+    animation:fall linear forwards}
+  @keyframes fall{to{transform:translateY(110vh) rotate(720deg)}}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>🏖️ 휴가 당첨 사다리 타기</h1>
+  <p class="sub">‘시작’을 누른 뒤 이름을 누르면 지렁이가 사다리를 따라 기어 내려갑니다</p>
+  <div class="controls">
+    <button class="main" id="startBtn">시작</button>
+    <button class="main ghost" id="allBtn" disabled>전체 결과 보기</button>
+  </div>
+  <div class="board">
+    <div class="row" id="names"></div>
+    <svg id="svg" viewBox="0 0 800 520" aria-label="사다리">
+      <g id="verticals"></g>
+      <g id="rungs"></g>
+      <g id="trails"></g>
+      <g id="worms"></g>
+    </svg>
+    <div class="row" id="prizes"></div>
+  </div>
+  <div class="msg" id="msg">‘시작’을 눌러 사다리를 만들어 주세요</div>
+</div>
+
+<script>
+const NAMES = ['효연','정은','현정','지선','은영','무결','지운','민관'];
+const COLORS = ['#e4572e','#2e86de','#20a35a','#9b59b6','#f39c12','#e84393','#16a0a8','#6d4c41'];
+const WIN = '당첨! 내일 휴가', LOSE = '회장님 1:1 면담';
+const N = NAMES.length, W = 800, H = 520, TOP = 8, BOT = H - 8;
+const colX = i => (i + 0.5) * W / N;
+const NS = 'http://www.w3.org/2000/svg';
+const $ = id => document.getElementById(id);
+const svg = $('svg');
+
+let rungs = [], prizes = [], ready = false, running = 0, finished = new Set();
+
+function el(tag, attrs, parent){
+  const e = document.createElementNS(NS, tag);
+  for (const k in attrs) e.setAttribute(k, attrs[k]);
+  if (parent) parent.appendChild(e);
+  return e;
+}
+
+// 이름 버튼 · 결과 카드
+NAMES.forEach((n, i) => {
+  const b = document.createElement('button');
+  b.className = 'name'; b.textContent = n; b.disabled = true;
+  b.style.setProperty('--c', COLORS[i]);
+  b.onclick = () => run(i);
+  $('names').appendChild(b);
+  const p = document.createElement('div');
+  p.className = 'prize';
+  p.innerHTML = '<div class="in"><div class="face front">?</div><div class="face back"></div></div>';
+  $('prizes').appendChild(p);
+});
+
+// 세로줄
+for (let i = 0; i < N; i++)
+  el('line', {x1:colX(i), y1:TOP, x2:colX(i), y2:BOT, stroke:'#2b1d14', 'stroke-width':6, 'stroke-linecap':'round'}, $('verticals'));
+
+function shuffle(a){ for (let i = a.length - 1; i > 0; i--){ const j = Math.random() * (i + 1) | 0; [a[i], a[j]] = [a[j], a[i]]; } return a; }
+
+function makeRungs(){
+  const out = [], MIN = 26, Y0 = TOP + 30, Y1 = BOT - 30;
+  for (let g = 0; g < N - 1; g++){
+    const want = 3 + (Math.random() * 3 | 0);      // 칸마다 가로줄 3~5개
+    let tries = 0, got = 0;
+    while (got < want && tries++ < 400){
+      const y = Y0 + Math.random() * (Y1 - Y0);
+      if (out.some(r => Math.abs(r.g - g) <= 1 && Math.abs(r.y - y) < MIN)) continue;
+      out.push({g, y}); got++;
+    }
+  }
+  return out.sort((a, b) => a.y - b.y);
+}
+
+function start(){
+  // 초기화
+  ['rungs','trails','worms'].forEach(id => $(id).innerHTML = '');
+  finished.clear(); running = 0;
+  document.querySelectorAll('.name').forEach(b => { b.disabled = true; b.classList.remove('done'); });
+  document.querySelectorAll('.prize').forEach(p => p.classList.remove('open'));
+  $('msg').textContent = '사다리를 그리는 중...';
+  $('startBtn').disabled = true; $('allBtn').disabled = true;
+
+  prizes = shuffle([WIN, ...Array(N - 1).fill(LOSE)]);
+  rungs = makeRungs();
+
+  // 가로줄을 랜덤 순서로 하나씩 그려 보이기
+  const order = shuffle(rungs.slice());
+  order.forEach((r, k) => {
+    const len = W / N;
+    const ln = el('line', {x1:colX(r.g), y1:r.y, x2:colX(r.g + 1), y2:r.y, stroke:'#2b1d14',
+      'stroke-width':6, 'stroke-linecap':'round', class:'rung'}, $('rungs'));
+    ln.style.setProperty('--len', len);
+    setTimeout(() => ln.classList.add('show'), 80 + k * 90);
+  });
+  setTimeout(() => {
+    ready = true;
+    document.querySelectorAll('.name').forEach(b => b.disabled = false);
+    $('startBtn').disabled = false; $('allBtn').disabled = false;
+    $('msg').textContent = '이름을 눌러 결과를 확인하세요!';
+  }, 80 + order.length * 90 + 400);
+}
+
+function pathFor(c){
+  const pts = [[colX(c), TOP]];
+  let y = TOP;
+  for (const r of rungs){
+    if (r.y <= y) continue;
+    if (r.g === c || r.g === c - 1){
+      const nc = r.g === c ? c + 1 : c - 1;
+      pts.push([colX(c), r.y], [colX(nc), r.y]);
+      c = nc; y = r.y;
+    }
+  }
+  pts.push([colX(c), BOT]);
+  return {pts, end:c};
+}
+
+// 경로 위 거리 s 지점의 좌표와 방향
+function sampler(pts){
+  const seg = []; let total = 0;
+  for (let i = 1; i < pts.length; i++){
+    const [x1, y1] = pts[i - 1], [x2, y2] = pts[i];
+    const l = Math.hypot(x2 - x1, y2 - y1);
+    if (l > 0){ seg.push({x1, y1, dx:(x2 - x1) / l, dy:(y2 - y1) / l, s0:total, l}); total += l; }
+  }
+  return {total, at(s){
+    s = Math.max(0, Math.min(total, s));
+    let g = seg[seg.length - 1];
+    for (const q of seg) if (s <= q.s0 + q.l){ g = q; break; }
+    const t = s - g.s0;
+    return {x:g.x1 + g.dx * t, y:g.y1 + g.dy * t, dx:g.dx, dy:g.dy};
+  }};
+}
+
+function run(i){
+  if (!ready || finished.has(i)) return;
+  finished.add(i); running++;
+  const btn = document.querySelectorAll('.name')[i];
+  btn.disabled = true; btn.classList.add('done');
+  $('startBtn').disabled = true;
+
+  const color = COLORS[i];
+  const {pts, end} = pathFor(i);
+  const P = sampler(pts);
+
+  // 지나간 자국
+  const trail = el('polyline', {points:pts.map(p => p.join(',')).join(' '), fill:'none', stroke:color,
+    'stroke-width':10, 'stroke-linecap':'round', 'stroke-linejoin':'round', opacity:.9}, $('trails'));
+  trail.style.strokeDasharray = P.total;
+  trail.style.strokeDashoffset = P.total;
+
+  // 지렁이 몸통
+  const g = el('g', {}, $('worms'));
+  const K = 13, segs = [];
+  for (let k = K; k >= 1; k--){
+    const r = 8.5 - k * 0.35;
+    segs[k] = el('circle', {r, fill:color, stroke:'#2b1d14', 'stroke-width':1.6}, g);
+  }
+  const band = el('circle', {r:7.5, fill:'none', stroke:'#fff', 'stroke-width':2.2, opacity:.7}, g); // 환대
+  const head = el('circle', {r:10, fill:color, stroke:'#2b1d14', 'stroke-width':2}, g);
+  const eyes = [0, 1].map(() => ({
+    w: el('circle', {r:3.6, fill:'#fff', stroke:'#2b1d14', 'stroke-width':1}, g),
+    p: el('circle', {r:1.8, fill:'#111'}, g)
+  }));
+  const smile = el('path', {fill:'none', stroke:'#2b1d14', 'stroke-width':1.6, 'stroke-linecap':'round'}, g);
+
+  const BASE = 200;                 // 기본 속도(값이 작을수록 느림)
+  let s = 0, last = null, t = 0;
+  function frame(now){
+    if (last == null) last = now;
+    const dt = Math.min(0.05, (now - last) / 1000); last = now; t += dt;
+    const ph = t * Math.PI * 2 * 1.3;
+    s += BASE * (0.18 + 0.82 * Math.max(0, Math.sin(ph))) * dt;   // 꿈틀-멈칫 하며 전진
+    if (s > P.total) s = P.total;
+
+    trail.style.strokeDashoffset = P.total - s;
+
+    const stretch = 1 + 0.35 * Math.sin(ph - Math.PI / 2);
+    let pos;
+    for (let k = K; k >= 1; k--){
+      pos = P.at(s - k * 7.5 * stretch);
+      const wig = 2.6 * Math.sin(t * 7 - k * 0.9);
+      segs[k].setAttribute('cx', pos.x - pos.dy * wig);
+      segs[k].setAttribute('cy', pos.y + pos.dx * wig);
+      if (k === 4){ band.setAttribute('cx', pos.x - pos.dy * wig); band.setAttribute('cy', pos.y + pos.dx * wig); }
+    }
+    const h = P.at(s);
+    const hw = 1.5 * Math.sin(t * 7);
+    const hx = h.x - h.dy * hw, hy = h.y + h.dx * hw;
+    head.setAttribute('cx', hx); head.setAttribute('cy', hy);
+    [-1, 1].forEach((side, j) => {
+      const ex = hx + h.dx * 3 - h.dy * 4.5 * side, ey = hy + h.dy * 3 + h.dx * 4.5 * side;
+      eyes[j].w.setAttribute('cx', ex); eyes[j].w.setAttribute('cy', ey);
+      eyes[j].p.setAttribute('cx', ex + h.dx * 1.4); eyes[j].p.setAttribute('cy', ey + h.dy * 1.4);
+    });
+    const mx = hx + h.dx * 7, my = hy + h.dy * 7;
+    smile.setAttribute('d', `M${mx - h.dy * 3.5},${my + h.dx * 3.5} Q${mx + h.dx * 2},${my + h.dy * 2} ${mx + h.dy * 3.5},${my - h.dx * 3.5}`);
+
+    if (s < P.total) requestAnimationFrame(frame);
+    else arrive(i, end);
+  }
+  requestAnimationFrame(frame);
+}
+
+function arrive(i, end){
+  running--;
+  const p = document.querySelectorAll('.prize')[end];
+  const back = p.querySelector('.back');
+  const prize = prizes[end];
+  back.className = 'face back' + (prize === WIN ? ' win' : '');
+  back.innerHTML = (prize === WIN ? '🎉<br>' : '') + prize + `<small>${NAMES[i]}</small>`;
+  p.classList.add('open');
+  $('msg').innerHTML = prize === WIN
+    ? `🎉 <span class="w">${NAMES[i]}</span> 님 <span class="w">당첨! 내일 휴가</span> 🎉`
+    : `${NAMES[i]} 님 → ${LOSE}`;
+  if (prize === WIN) confetti();
+  if (running === 0) $('startBtn').disabled = false;
+  if (finished.size === N) $('allBtn').disabled = true;
+}
+
+function confetti(){
+  const cs = ['#d4252c','#f39c12','#2e86de','#20a35a','#e84393','#fff200'];
+  for (let k = 0; k < 90; k++){
+    const d = document.createElement('div');
+    d.className = 'confetti';
+    d.style.left = Math.random() * 100 + 'vw';
+    d.style.background = cs[k % cs.length];
+    d.style.animationDuration = 2 + Math.random() * 2.5 + 's';
+    d.style.animationDelay = Math.random() * 0.8 + 's';
+    document.body.appendChild(d);
+    setTimeout(() => d.remove(), 6000);
+  }
+}
+
+$('startBtn').onclick = start;
+$('allBtn').onclick = () => {
+  $('allBtn').disabled = true;
+  NAMES.forEach((_, i) => { if (!finished.has(i)) setTimeout(() => run(i), i * 250); });
+};
+</script>
+</body>
+</html>
